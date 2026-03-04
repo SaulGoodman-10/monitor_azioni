@@ -4,6 +4,8 @@ from datetime import datetime
 import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import ReplyKeyboardMarkup
+from telegram.ext import MessageHandler, filters
 
 # Configurazione Log
 logging.basicConfig(level=logging.INFO)
@@ -12,7 +14,7 @@ MARKETS = {
     "🇺🇸 INDICI USA": {"S&P 500": "^GSPC", "Dow Jones": "^DJI", "Nasdaq 100": "^NDX"},
     "🇪🇺 INDICI EUROPA": {"Stoxx 600": "^STOXX", "FTSE MIB": "FTSEMIB.MI", "DAX": "^GDAXI", "CAC 40": "^FCHI", "FTSE 100": "^FTSE", "IBEX 35": "^IBEX"},
     "🌏 ASIA": {"Nikkei 225": "^N225", "Shanghai": "000001.SS", "KOSPI": "^KS11"},
-    "🛢️ COMMODITIES": {"Petrolio WTI": "CL=F", "Gas Naturale": "NG=F"},
+    "🛢️ COMMODITIES": {"Petrolio WTI": "CL=F", "Gas Naturale": "TTF=F"},
     "🇺🇸 AZIONI USA": {
         "NVIDIA": "NVDA", "AMD": "AMD", "Apple": "AAPL", 
         "Microsoft": "MSFT", "Meta": "META", "Alphabet": "GOOG",
@@ -96,11 +98,18 @@ async def auto_report_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    for job in context.job_queue.get_jobs_by_name(str(chat_id)):
-        job.schedule_removal()
     
-    context.job_queue.run_repeating(auto_report_job, interval=3600, first=5, chat_id=chat_id, name=str(chat_id))
-    await update.message.reply_text("✅ <b>Bot attivo!</b>\nRiceverai due messaggi: variazioni e analisi range.", parse_mode='HTML')
+    # Definiamo i pulsanti (una lista di liste per le righe)
+    keyboard = [['📊 Aggiorna Quotazioni']]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    # ... (tieni il codice per pulire i job esistenti e configurare il timer) ...
+
+    await update.message.reply_text(
+        "✅ <b>Bot attivo!</b>\nUsa il tasto in basso per aggiornamenti istantanei.",
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 if __name__ == '__main__':
     with open("token.txt", "r") as f:
@@ -108,4 +117,5 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("quotazioni", manual_report))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_report))    
     app.run_polling()
