@@ -35,57 +35,70 @@ def generate_visual_bar(current, low, high, slots=10):
     bar[dot_pos] = "●"
     return f"<code>[{''.join(bar)}]</code>"
 
-def fetch_data():
+def fetch_diff_data():
+    """Restituisce il messaggio con le variazioni percentuali."""
     perf_text = "📊 <b>VARIAZIONI MERCATI</b>\n"
     perf_text += f"🕒 <i>{datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M')}</i>\n"
     perf_text += "────────────────────\n\n"
-    
-    range_text = "📈 <b>RANGE 52 SETT. (L ↔ H)</b>\n"
-    range_text += "────────────────────\n\n"
 
     for category, tickers in MARKETS.items():
         perf_text += f"<b>{category}</b>\n"
-        range_text += f"<b>{category}</b>\n"
         for name, symbol in tickers.items():
             try:
                 t = yf.Ticker(symbol)
                 hist = t.history(period="2d")
                 if len(hist) < 2: continue
-                
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
-                
                 perf_text += f"{'🟢' if change >= 0 else '🔴'} <code>{name:<12}</code> <b>{'+' if change>=0 else ''}{change:.2f}%</b>\n"
-                
+            except: 
+                perf_text += f"<code>{name:<12}</code> N/A\n"
+        perf_text += "\n"
+    return perf_text
+
+def fetch_range_data():
+    """Restituisce il messaggio con il range 52 settimane."""
+    range_text = "📈 <b>RANGE 52 SETT. (L ↔ H)</b>\n"
+    range_text += "────────────────────\n\n"
+
+    for category, tickers in MARKETS.items():
+        range_text += f"<b>{category}</b>\n"
+        for name, symbol in tickers.items():
+            try:
+                t = yf.Ticker(symbol)
+                hist = t.history(period="1d")
                 info = t.info
+                curr = hist['Close'].iloc[-1]
                 range_text += f"<code>{name:<12}</code> {generate_visual_bar(curr, info.get('fiftyTwoWeekLow'), info.get('fiftyTwoWeekHigh'))}\n"
-            except: pass
-        perf_text += "\n"; range_text += "\n"
-    return perf_text, range_text
+            except: 
+                range_text += f"<code>{name:<12}</code> N/A\n"
+        range_text += "\n"
+    return range_text
 
 # --- HANDLERS ---
-async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    perf_msg, range_msg = fetch_data()
-    await context.bot.send_message(chat_id=chat_id, text=perf_msg, parse_mode='HTML')
-    await context.bot.send_message(chat_id=chat_id, text=range_msg, parse_mode='HTML')
+MAIN_KEYBOARD = ReplyKeyboardMarkup([["📊 VARIAZIONI", "📈 RANGE 52W"], ["⏱️ IMPOSTA TIMER"]], resize_keyboard=True)
+
+async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, report_type="diff"):
+    if report_type == "diff":
+        msg = fetch_diff_data()
+    else:
+        msg = fetch_range_data()
+    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', reply_markup=MAIN_KEYBOARD if report_type=="diff" else None)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Tastiera fissa (ReplyKeyboard)
-    keyboard = [["📊 QUOTAZIONI", "⏱️ IMPOSTA TIMER"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
     await update.message.reply_text(
         "🚀 <b>Bot pronto!</b>\nUsa i tasti qui sotto per interagire velocemente.",
-        reply_markup=reply_markup, parse_mode='HTML'
+        reply_markup=MAIN_KEYBOARD, parse_mode='HTML'
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if text == "📊 QUOTAZIONI":
-        await send_report(context, update.effective_chat.id)
+    if text == "📊 VARIAZIONI":
+        await send_report(context, update.effective_chat.id, "diff")
+    elif text == "📈 RANGE 52W":
+        await send_report(context, update.effective_chat.id, "range")
     elif text == "⏱️ IMPOSTA TIMER":
-        # Tastiera a scomparsa (Inline)
         keyboard = [
             [InlineKeyboardButton("15 Minuti", callback_data='900'),
              InlineKeyboardButton("30 Minuti", callback_data='1800')],
@@ -108,22 +121,23 @@ async def timer_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == 'stop':
         await query.edit_message_text("❌ Invio automatico disattivato.")
+        # Ripristina tastiera principale
+        await context.bot.send_message(chat_id=chat_id, text="Torna alla tastiera principale:", reply_markup=MAIN_KEYBOARD)
         return
 
     interval = int(data)
-    # Imposta nuovo job
     context.job_queue.run_repeating(
-        auto_report_job, interval=interval, first=10, 
-        chat_id=chat_id, name=str(chat_id)
+        auto_report_job, interval=interval, first=10, chat_id=chat_id, name=str(chat_id)
     )
-    
     mins = interval // 60
     await query.edit_message_text(f"✅ Timer impostato: riceverai i dati ogni <b>{mins} minuti</b> (h 10-22).", parse_mode='HTML')
+    # Invia nuova tastiera principale
+    await context.bot.send_message(chat_id=chat_id, text="Torna alla tastiera principale:", reply_markup=MAIN_KEYBOARD)
 
 async def auto_report_job(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(pytz.timezone('Europe/Rome'))
     if 10 <= now.hour <= 22:
-        await send_report(context, context.job.chat_id)
+        await send_report(context, context.job.chat_id, report_type="diff")
 
 if __name__ == '__main__':
     with open("token.txt", "r") as f:
