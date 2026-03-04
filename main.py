@@ -1,33 +1,36 @@
 import logging
 import yfinance as yf
-from datetime import time
+from datetime import datetime
 import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# 1. Configurazione Mercati e Azioni dalle tue immagini
+# Configurazione Log
+logging.basicConfig(level=logging.INFO)
+
+# Configurazione Mercati e Titoli
 MARKETS = {
     "🇺🇸 INDICI USA": {"S&P 500": "^GSPC", "Dow Jones": "^DJI", "Nasdaq 100": "^NDX"},
     "🇪🇺 INDICI EUROPA": {"Stoxx 600": "^STOXX", "FTSE MIB": "FTSEMIB.MI", "DAX": "^GDAXI", "CAC 40": "^FCHI", "FTSE 100": "^FTSE", "IBEX 35": "^IBEX"},
     "🌏 ASIA": {"Nikkei 225": "^N225", "Shanghai": "000001.SS", "KOSPI": "^KS11"},
     "🛢️ COMMODITIES": {"Petrolio WTI": "CL=F", "Gas Naturale": "NG=F"},
-    
-    # --- NUOVE AGGIUNTE DALLE TUE IMMAGINI ---
     "🇺🇸 AZIONI USA": {
         "NVIDIA": "NVDA", "AMD": "AMD", "Apple": "AAPL", 
         "Microsoft": "MSFT", "Meta": "META", "Alphabet": "GOOG",
         "Netflix": "NFLX", "Intel": "INTC", "Enphase": "ENPH", "DexCom": "DXCM"
     },
-    "🇮🇹 AZIONI ITA": {
-        "UniCredit": "UCG.MI", "Intesa SP": "ISP.MI", "Enel": "ENEL.MI",
-        "Eni": "ENI.MI", "Leonardo": "LDO.MI", "Stellantis": "STLAM.MI",
-        "Ferrari": "RACE.MI", "STMicro": "STMMI.MI", "Fineco": "FBK.MI",
-        "Nexi": "NEXI.MI", "A2A": "A2A.MI", "OVS": "OVS.MI"
+    "🇮🇹 AZIONI EU": {
+        "UniCredit": "UCG.MI", "Intesa SP": "ISP.MI", "MPS": "BMPS.MI", "Fineco": "FBK.MI", "Nexi": "NEXI.MI",
+        "Enel": "ENEL.MI", "Eni": "ENI.MI", "A2A": "A2A.MI", 
+        "Leonardo": "LDO.MI", "STMicro": "STMMI.MI", "Cy4gate": "CY4.MI",
+        "Stellantis": "STLAM.MI", "Ferrari": "RACE.MI", "Volkswagen": "VOW3.DE",
+        "OVS": "OVS.MI"
     }
 }
 
 def fetch_performance():
     text = "📊 <b>VARIAZIONI MERCATI & TITOLI</b>\n"
+    text += f"🕒 <i>Aggiornamento: {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M')}</i>\n"
     text += "────────────────────\n\n"
     for category, tickers in MARKETS.items():
         text += f"<b>{category}</b>\n"
@@ -39,42 +42,66 @@ def fetch_performance():
                     change = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
                     status = "🟢" if change >= 0 else "🔴"
                     sign = "+" if change >= 0 else ""
-                    # Formattazione per mantenere l'allineamento
                     text += f"{status} <code>{name:<12}</code> <b>{sign}{change:.2f}%</b>\n"
             except:
-                text += f"❌ <code>{name:<12}</code> Errore\n"
+                pass # Salta errori silenziosamente per non sporcare il report
         text += "\n"
     return text + "────────────────────"
 
-async def manual_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Funzione per l'invio (usata sia da comando che da job)
+async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     report = fetch_performance()
-    await update.message.reply_text(report, parse_mode='HTML')
+    await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='HTML')
 
+# Handler comando manuale
+async def manual_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_report(context, update.effective_chat.id)
+
+# Funzione richiamata dal timer ogni ora
 async def auto_report_job(context: ContextTypes.DEFAULT_TYPE):
     tz = pytz.timezone('Europe/Rome')
-    # Usiamo datetime.now(tz) per sicurezza sull'orario
-    import datetime
-    now = datetime.datetime.now(tz)
+    now = datetime.now(tz)
     
-    if 10 <= now.hour <= 21:
-        report = fetch_performance()
-        await context.bot.send_message(chat_id=context.job.chat_id, text=report, parse_mode='HTML')
+    # Controllo finestra temporale: dalle 10 alle 22 incluse
+    if 10 <= now.hour <= 22:
+        await send_report(context, context.job.chat_id)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    for job in context.job_queue.get_jobs_by_name(str(chat_id)):
+    
+    # Pulizia job esistenti per evitare messaggi multipli
+    current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for job in current_jobs:
         job.schedule_removal()
 
-    context.job_queue.run_repeating(auto_report_job, interval=7200, first=10, chat_id=chat_id, name=str(chat_id))
-    await update.message.reply_text("✅ Bot attivo e titoli aggiunti!\n\n- /quotazioni per i dati ora\n- Report automatico ogni 2 ore (10-21).")
+    # Programma: ogni 3600 secondi (1 ora)
+    context.job_queue.run_repeating(
+        auto_report_job, 
+        interval=3600, 
+        first=5, 
+        chat_id=chat_id, 
+        name=str(chat_id)
+    )
+    
+    await update.message.reply_text(
+        "✅ <b>Bot configurato!</b>\n\n"
+        "• Riceverai aggiornamenti ogni ora dalle 10:00 alle 22:00.\n"
+        "• Usa /quotazioni per un report istantaneo.",
+        parse_mode='HTML'
+    )
 
 if __name__ == '__main__':
-    with open("token.txt", "r") as f:
-        token = f.read().strip()
+    try:
+        with open("token.txt", "r") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        print("Errore: Crea un file token.txt con il tuo API Token.")
+        exit()
     
     app = ApplicationBuilder().token(token).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("quotazioni", manual_report))
     
-    print("Bot in esecuzione con i nuovi titoli...")
+    print("Bot avviato. In attesa di comandi...")
     app.run_polling()
